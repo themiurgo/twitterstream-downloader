@@ -42,7 +42,6 @@ class TwitterStreamCrawler(object):
         #kw = {'track': ','.join(keywords)}
         r = requests.post(url, data=data, auth=self._auth, stream=True)
         for line in r.iter_lines():
-            #do(line)
         #for i in api.statuses.filter(locations=coords):
            # except urllib2.URLError as e:
            #     print str(e)
@@ -52,7 +51,7 @@ class TwitterStreamCrawler(object):
            #             f.write(str(datetime.datetime.now()))
            #             f.write("\n")
            #         continue
-            #db_instance.save(line)
+            db_instance.save(line)
             try:
                 pass
                 #print i['text']
@@ -90,7 +89,7 @@ if __name__ == "__main__":
     if args.p:
         data = dict([i.split('=') for i in args.p])
     if endpoint == 'filter':
-        assert set(data).intersection(('track', 'location', 'follow'))
+        assert set(data).intersection(('track', 'locations', 'follow'))
 
     filename = args.file
     api = TwitterStreamCrawler(filename, args.uk, args.us, args.ck, args.cs) 
