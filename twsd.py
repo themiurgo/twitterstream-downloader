@@ -52,6 +52,7 @@ class TwitterStreamCrawler(object):
            #             f.write("\n")
            #         continue
             db_instance.save(line)
+            #db_instance.sync()
             try:
                 pass
                 #print i['text']
@@ -60,10 +61,10 @@ class TwitterStreamCrawler(object):
                 print("ERROR")
                 pass
             count += 1
-            now = datetime.datetime.now()
-            delta = now - start_time
-            rate = float(count) / delta.total_seconds()
             if not count % 100:
+                now = datetime.datetime.now()
+                delta = now - start_time
+                rate = float(count) / delta.total_seconds()
                 print("Total tweets", count, "\tRate", rate)
 
 if __name__ == "__main__":

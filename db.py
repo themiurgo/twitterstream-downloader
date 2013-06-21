@@ -8,7 +8,7 @@ class FilenameRotator(object):
     @property
     def filename(self):
         today = datetime.datetime.now().strftime("%Y%m%d")
-        return "{0}_{1}.gz".format(self._base_filename, today)
+        return "{0}_{1}.json".format(self._base_filename, today)
 
 class FileAppendDb(object):
     def __init__(self, filename):
