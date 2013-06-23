@@ -6,6 +6,7 @@ from __future__ import print_function
 import argparse
 import datetime
 import urllib2
+import logging
 import sys
 import time
 
@@ -14,6 +15,16 @@ from requests_oauthlib import OAuth1
 import json
 
 import db
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+screen_handler = logging.StreamHandler(sys.stderr)
+screen_handler.setLevel(logging.INFO)
+screen_handler.setFormatter(formatter)
+logger.addHandler(screen_handler)
+
 
 # TODO use logging module
 # TODO move OAUTH parameters to external config file (json, YAML or conf)
@@ -24,6 +35,8 @@ DESCRIPTION = """Download tweets in realtime using the Twitter Streaming API.
 
 EPILOG = """Requires Python Requests and Python Requests Oauthlib."""
 
+URL = 'https://stream.twitter.com/1.1/statuses/{0}.json'
+
 class TwitterStreamCrawler(object):
     def __init__(self, base_filename, user_key, user_secret, app_key,
             app_secret):
@@ -31,17 +44,23 @@ class TwitterStreamCrawler(object):
         self._db_instance = db.FileAppendDb(base_filename)
         self._auth = OAuth1(app_key, app_secret, user_key, user_secret, 
                       signature_type='auth_header')
+        file_handler = logging.FileHandler(base_filename+".log")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
     def each_tweet(self, line):
-        tweet = json.loads(line)
-        if 'limit' in tweet:
-            now = datetime.datetime.now()
-            n_tweets = tweet['limit']['track']
-            with open(self.base_filename+".error.log", "a+") as f:
-                f.write("LIMIT hit at {0}, {1} tweets retained\n".format(now, n_tweets))
-            print("LIMIT hit at {0}, {1} tweets retained".format(now, n_tweets))
-        self._db_instance.save(line)
-        #self._db_instance.sync()
+        line = line.strip()
+        if line:
+            self._db_instance.save(line)
+            #self._db_instance.sync()
+            try:
+                tweet = json.loads(line)
+                if 'limit' in tweet:
+                    n_tweets = tweet['limit']['track']
+                    logger.warning("LIMIT: %s tweets retained", n_tweets)
+            except ValueError:
+                logger.error("Not valid JSON on line: %s", line)
 
     def request_stream(self, url, data):
         count = 0
@@ -56,24 +75,28 @@ class TwitterStreamCrawler(object):
                 now = datetime.datetime.now()
                 delta = now - start_time
                 rate = float(count) / delta.total_seconds()
-                print("Total tweets", count, "\tRate", rate)
+                print("Total tweets", count, "\tRate", rate) # Change to logger.
                 start_time = datetime.datetime.now()
                 count = 0
 
     def receive(self, endpoint, data, print_tweets=False):
-        # TODO print_tweets
-        url = 'https://stream.twitter.com/1.1/statuses/{0}.json'.format(endpoint)
+        url = URL.format(endpoint)
         while True:
             try:
+                logger.info("Requesting stream: %s. Params: %s", url, data)
                 self.request_stream(url, data)
-            except KeyboardInterrupt:
+                # TODO print_tweets
+            except (KeyboardInterrupt, SystemExit):
+                # TODO clean outfile?
+                logger.info("Shutting down (manual shutdown).")
+                logging.shutdown()
                 sys.exit(0)
-            except requests.exceptions.Timeout: # Handle timeouts
-                with open(self.base_filename+".error.log", "a+") as f:
-                    f.write("TIMEOUT at {0}\n".format(datetime.datetime.now()))
-                print("TIMEOUT at {0}".format(datetime.datetime.now()))
-                print("Retrying in {0} seconds".format(self.delay))
-                time.sleep(self.delay) # TODO introduce exp backoff
+            # Handle network timeout
+            except requests.exceptions.Timeout as e:
+                timeout = self.timeout
+                delay = self.delay # TODO introduce exp backoff
+                logger.info("Request timed out (timeout=%s). Waiting and retrying (delay=%s).", timeout, delay)
+                time.sleep(delay)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="""Download twitter streams using the
@@ -82,7 +105,8 @@ if __name__ == "__main__":
     parser.add_argument('cs', help='consumer secret')
     parser.add_argument('uk', help='user key')
     parser.add_argument('us', help='user secret')
-    parser.add_argument('endpoint', help='method of the Streaming API to use', default='filter')
+    parser.add_argument('endpoint', help='method of the Streaming API to use', default='filter',
+            choices=('filter', 'sample', 'firehose'))
     parser.add_argument('-p', help="""add a method parameter ('name=value')""",
             metavar="PARNAME=PARVAL", action='append')
     parser.add_argument('-o', '--print', help='print every tweet', action='store_true')
