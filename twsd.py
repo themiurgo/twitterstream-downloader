@@ -7,6 +7,7 @@ import argparse
 import datetime
 import urllib2
 import sys
+import time
 
 import requests
 from requests_oauthlib import OAuth1
@@ -20,52 +21,50 @@ DESCRIPTION = """Download tweets in realtime using the Twitter Streaming API.
 
 EPILOG = """Requires Python Requests and Python Requests Oauthlib."""
 
+TIMEOUT = 30
+SLEEPTIME = 10
+
 class TwitterStreamCrawler(object):
     def __init__(self, base_filename, user_key, user_secret, app_key,
             app_secret):
+        self.base_filename = base_filename
         self._db_instance = db.FileAppendDb(base_filename)
         self._auth = OAuth1(app_key, app_secret, user_key, user_secret, 
                       signature_type='auth_header')
 
-    def receive(self, endpoint, data, print_tweets=False):
-        url = 'https://stream.twitter.com/1.1/statuses/{0}.json'.format(endpoint)
-        db_instance = self._db_instance
+    def each_tweet(self, tweet):
+        self._db_instance.save(tweet)
+        #self._db_instance.sync()
+
+    def request_stream(self, url, data):
         count = 0
         start_time = datetime.datetime.now()
-        if not print_tweets:
-            do = lambda x: None
-        else:
-            def do(tweet):
-                print(json.loads(tweet)['text'])
-        #coords = "-180,-90,180,90"
-        #for i in api.statuses.sample():
-        #kw = {'track': ','.join(keywords)}
-        r = requests.post(url, data=data, auth=self._auth, stream=True)
+        db_instance = self._db_instance
+        r = requests.post(url, data=data, auth=self._auth, stream=True, timeout=TIMEOUT)
+        each_tweet = self.each_tweet
         for line in r.iter_lines():
-        #for i in api.statuses.filter(locations=coords):
-           # except urllib2.URLError as e:
-           #     print str(e)
-           #     if isinstance(e.reason, socket.timeout):
-           #         with open("error.log", "a") as f:
-           #             f.write("Error ")
-           #             f.write(str(datetime.datetime.now()))
-           #             f.write("\n")
-           #         continue
-            db_instance.save(line)
-            #db_instance.sync()
-            try:
-                pass
-                #print i['text']
-            except:
-                raise
-                print("ERROR")
-                pass
+            each_tweet(line)
             count += 1
             if not count % 100:
                 now = datetime.datetime.now()
                 delta = now - start_time
                 rate = float(count) / delta.total_seconds()
                 print("Total tweets", count, "\tRate", rate)
+                start_time = datetime.datetime.now()
+                count = 0
+
+    def receive(self, endpoint, data, print_tweets=False):
+        # TODO print_tweets
+        url = 'https://stream.twitter.com/1.1/statuses/{0}.json'.format(endpoint)
+        try:
+            while True:
+                self.request_stream(url, data)
+        except requests.exceptions.Timeout: # Handle timeouts
+            with open(self.base_filename+".error.log", "a+") as f:
+                f.write("TIMEOUT at {0}\n".format(datetime.datetime.now()))
+            print("TIMEOUT at {0}".format(datetime.datetime.now()))
+            print("Sleeping {0} seconds".format(SLEEPTIME))
+            time.sleep(SLEEPTIME) # TODO introduce exp backoff
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="""Download twitter streams using the
