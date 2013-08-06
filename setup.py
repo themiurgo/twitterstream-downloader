@@ -9,6 +9,10 @@ setup(name='twsd',
       author='Antonio Lima',
       author_email='anto87@gmail.com',
       url='',
+      install_requires=[
+              'requests',
+              'requests-oauthlib',
+          ],
       packages=['twsd'],
       entry_points="""
       [console_scripts]
