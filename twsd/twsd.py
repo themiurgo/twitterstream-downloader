@@ -28,6 +28,7 @@ logger.addHandler(screen_handler)
 
 # TODO use logging module
 # TODO move OAUTH parameters to external config file (json, YAML or conf)
+# TODO better recovery (backfill)
 
 DESCRIPTION = """Download tweets in realtime using the Twitter Streaming API.
 
@@ -98,7 +99,7 @@ class TwitterStreamCrawler(object):
                 logger.info("Request timed out (timeout=%s). Waiting and retrying (delay=%s).", timeout, delay)
                 time.sleep(delay)
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="""Download twitter streams using the
     Streaming API""", epilog=EPILOG)
     parser.add_argument('ck', help='consumer key')
@@ -135,3 +136,6 @@ if __name__ == "__main__":
     api.timeout = args.timeout
     api.delay = args.delay
     api.receive(endpoint, data, print_tweets=True)
+
+if __name__ == "__main__":
+    main()
