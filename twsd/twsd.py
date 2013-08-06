@@ -5,14 +5,15 @@ from __future__ import print_function
 
 import argparse
 import datetime
-import urllib2
+import json
 import logging
 import sys
 import time
+import urllib2
 
 import requests
 from requests_oauthlib import OAuth1
-import json
+from urlparse import parse_qs
 
 import db
 
@@ -37,6 +38,37 @@ DESCRIPTION = """Download tweets in realtime using the Twitter Streaming API.
 EPILOG = """Requires Python Requests and Python Requests Oauthlib."""
 
 URL = 'https://stream.twitter.com/1.1/statuses/{0}.json'
+
+S_AUTH1 = """
+To authorize the app, please go to {0} and follow the process.
+Please enter the PIN to complete the authorization process.
+"""
+S_AUTH2 = """
+Authorization details:
+USER_KEY: {0},
+USER_SECRET: {1}
+"""
+
+def authorize(consumer_key, consumer_secret):
+    oauth = OAuth1(consumer_key, client_secret=consumer_secret)
+    request_token_url = "https://api.twitter.com/oauth/request_token"
+    r = requests.post(url=request_token_url, auth=oauth)
+    credentials = parse_qs(r.content)
+    resource_owner_key = credentials.get('oauth_token')[0]
+    resource_owner_secret = credentials.get('oauth_token_secret')[0]
+    authorize_url = "https://api.twitter.com/oauth/authorize?oauth_token="
+    authorize_url = authorize_url + resource_owner_key
+    print(S_AUTH1.format(authorize_url))
+    verifier = raw_input('PIN: ')
+
+    oauth = OAuth1(consumer_key, consumer_secret,
+            resource_owner_key, resource_owner_secret, verifier=verifier)
+    access_token_url = "https://api.twitter.com/oauth/access_token"
+    r = requests.post(url=access_token_url, auth=oauth)
+    credentials = parse_qs(r.content)
+    resource_owner_key = credentials.get('oauth_token')[0]
+    resource_owner_secret = credentials.get('oauth_token_secret')[0]
+    print(S_AUTH2.format(resource_owner_key, resource_owner_secret))
 
 class TwitterStreamCrawler(object):
     def __init__(self, base_filename, user_key, user_secret, app_key,
@@ -106,13 +138,13 @@ def main():
     parser.add_argument('cs', help='consumer secret')
     parser.add_argument('uk', help='user key')
     parser.add_argument('us', help='user secret')
-    parser.add_argument('endpoint', help='method of the Streaming API to use', default='filter',
-            choices=('filter', 'sample', 'firehose'))
+    parser.add_argument('endpoint', help='Method of the Streaming API to use', default='filter',
+            choices=('filter', 'sample', 'firehose', 'authorize'))
     parser.add_argument('-p', help="""add a method parameter ('name=value')""",
             metavar="PARNAME=PARVAL", action='append')
     parser.add_argument('-o', '--print', help='print every tweet', action='store_true')
     parser.add_argument('-f', '--file', help='output json to the specified file',
-            action='store')
+            action='store', default=sys.stdout)
     parser.add_argument('-r', '--rotate',
         help='rotate output file every N hours (default 24)', default=24,
         action='store', metavar="N", type=int)
@@ -130,6 +162,8 @@ def main():
         data = dict([i.split('=') for i in args.p])
     if endpoint == 'filter':
         assert set(data).intersection(('track', 'locations', 'follow'))
+    if endpoint == 'authorize':
+        authorize()
 
     filename = args.file
     api = TwitterStreamCrawler(filename, args.uk, args.us, args.ck, args.cs) 
