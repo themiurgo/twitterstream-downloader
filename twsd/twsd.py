@@ -7,6 +7,7 @@ import argparse
 import datetime
 import json
 import logging
+import os.path
 import sys
 import time
 import urllib2
@@ -16,6 +17,8 @@ from requests_oauthlib import OAuth1
 from urlparse import parse_qs
 
 import db
+from auth import Keychain
+from yn import query_yes_no
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -66,9 +69,10 @@ def authorize(consumer_key, consumer_secret):
     access_token_url = "https://api.twitter.com/oauth/access_token"
     r = requests.post(url=access_token_url, auth=oauth)
     credentials = parse_qs(r.content)
-    resource_owner_key = credentials.get('oauth_token')[0]
-    resource_owner_secret = credentials.get('oauth_token_secret')[0]
-    print(S_AUTH2.format(resource_owner_key, resource_owner_secret))
+    at = credentials.get('oauth_token')[0]
+    ats = credentials.get('oauth_token_secret')[0]
+    #print(S_AUTH2.format(resource_owner_key, resource_owner_secret))
+    return at, ats
 
 class TwitterStreamCrawler(object):
     def __init__(self, base_filename, user_key, user_secret, app_key,
@@ -131,13 +135,40 @@ class TwitterStreamCrawler(object):
                 logger.info("Request timed out (timeout=%s). Waiting and retrying (delay=%s).", timeout, delay)
                 time.sleep(delay)
 
+def make_keychain():
+    k = Keychain()
+
+    # Try to load a previous keychain
+    home = os.path.expanduser("~")
+    basename = ".twsd.auth"
+    authfname = os.path.join(home, basename)
+    try:
+        k.load(authfname)
+    except IOError: # File doesn't exist
+        conscred = query_yes_no("Do you have a CONSUMER KEY, CONSUMER SECRET pair?")
+        if not conscred:
+            print("Create a new application on https://dev.twitter.com/apps and try again.")
+            sys.exit(0)
+        else:
+            k = Keychain()
+            ck = raw_input("Input your CONSUMER KEY: ")
+            cs = raw_input("Input your CONSUMER SECRET: ")
+        k.set_consumer(ck, cs)
+        usercred = query_yes_no("Do you have an ACCESS TOKEN, ACCESS TOKEN SECRET pair?")
+        if usercred:
+            at = raw_input("Input your ACCESS TOKEN: ")
+            ats = raw_input("Input your ACCESS TOKEN SECRET: ")
+        else:
+            at, ats = authorize(ck, cs)
+        k.set_user(at, ats)
+
+    # Save the keychain for the next time
+    k.save(authfname)
+    return k
+
 def main():
     parser = argparse.ArgumentParser(description="""Download twitter streams using the
     Streaming API""", epilog=EPILOG)
-    parser.add_argument('ck', help='consumer key')
-    parser.add_argument('cs', help='consumer secret')
-    parser.add_argument('uk', help='user key')
-    parser.add_argument('us', help='user secret')
     parser.add_argument('endpoint', help='Method of the Streaming API to use', default='filter',
             choices=('filter', 'sample', 'firehose', 'authorize'))
     parser.add_argument('-p', help="""add a method parameter ('name=value')""",
@@ -156,17 +187,19 @@ def main():
         action='store', type=int, metavar="SECS")
     args = parser.parse_args()
 
+    k = make_keychain()
+
     endpoint = args.endpoint
     data = {}
     if args.p:
         data = dict([i.split('=') for i in args.p])
     if endpoint == 'filter':
         assert set(data).intersection(('track', 'locations', 'follow'))
-    if endpoint == 'authorize':
-        authorize()
 
     filename = args.file
-    api = TwitterStreamCrawler(filename, args.uk, args.us, args.ck, args.cs) 
+    ck, cs = k.get_consumer()
+    at, ats = k.get_user()
+    api = TwitterStreamCrawler(filename, at, ats, ck, cs)
     api.timeout = args.timeout
     api.delay = args.delay
     api.receive(endpoint, data, print_tweets=True)
