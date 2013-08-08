@@ -169,16 +169,13 @@ def make_keychain():
 def main():
     parser = argparse.ArgumentParser(description="""Download twitter streams using the
     Streaming API""", epilog=EPILOG)
-    parser.add_argument('endpoint', help='Method of the Streaming API to use', default='filter',
+    parser.add_argument('endpoint', help='Method of the Streaming API to use',
             choices=('filter', 'sample', 'firehose', 'authorize'))
+    parser.add_argument('fileprefix', help='output json to the specified file',
+            action='store') 
     parser.add_argument('-p', help="""add a method parameter ('name=value')""",
             metavar="PARNAME=PARVAL", action='append')
     parser.add_argument('-o', '--print', help='print every tweet', action='store_true')
-    parser.add_argument('-f', '--file', help='output json to the specified file',
-            action='store', default=sys.stdout)
-    parser.add_argument('-r', '--rotate',
-        help='rotate output file every N hours (default 24)', default=24,
-        action='store', metavar="N", type=int)
     parser.add_argument('--timeout', default=30,
         help='Streaming timeout in seconds (default 30)',
         action='store', type=int, metavar="SECS")
@@ -196,7 +193,7 @@ def main():
     if endpoint == 'filter':
         assert set(data).intersection(('track', 'locations', 'follow'))
 
-    filename = args.file
+    filename = args.fileprefix
     ck, cs = k.get_consumer()
     at, ats = k.get_user()
     api = TwitterStreamCrawler(filename, at, ats, ck, cs)
