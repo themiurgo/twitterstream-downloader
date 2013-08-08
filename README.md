@@ -5,7 +5,7 @@ Twitterstream-downloader (in the following `twsd`) is a Python script that allow
 
 Dumping all the tweets related to Arcade Fire and Radiohead is as simple as:
 
-    twsd filter -p track='Arcade Fire,Radiohead' -f music_news
+    twsd filter music_news -p track='Arcade Fire,Radiohead'
     
 This will download the Streaming messages to daily files
 `music_news_20130801.json`, `music_news_20130802.json`, ...
