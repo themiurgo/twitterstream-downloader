@@ -10,7 +10,6 @@ import logging
 import os.path
 import sys
 import time
-import urllib2
 
 import requests
 from requests_oauthlib import OAuth1
@@ -22,16 +21,28 @@ from yn import query_yes_no
 
 # Set up logging
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-screen_handler = logging.StreamHandler(sys.stderr)
-screen_handler.setLevel(logging.INFO)
-screen_handler.setFormatter(formatter)
-LOGGER.addHandler(screen_handler)
 
+def setup_logging():
+    LOGGER.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    screen_handler = logging.StreamHandler(sys.stderr)
+    screen_handler.setLevel(logging.INFO)
+    screen_handler.setFormatter(formatter)
+    LOGGER.addHandler(screen_handler)
+
+def iterjson(lines):
+    for line in lines:
+        try:
+            yield json.loads(line)
+        except ValueError:
+            LOGGER.error("Not valid JSON on line: %s", line)
+
+
+# TODO adapt the timeout to the rate of the tweets
 # TODO multiple accounts (oauth)
 # TODO multiple config location (home, current dir, ...)
 # TODO better recovery (backfill)
+# TOOD print tweets
 
 DESCRIPTION = """Download tweets in realtime using the Twitter Streaming API.
 
@@ -53,8 +64,8 @@ USER_SECRET: {1}
 def authorize(consumer_key, consumer_secret):
     oauth = OAuth1(consumer_key, client_secret=consumer_secret)
     request_token_url = "https://api.twitter.com/oauth/request_token"
-    r = requests.post(url=request_token_url, auth=oauth)
-    credentials = parse_qs(r.content)
+    response = requests.post(url=request_token_url, auth=oauth)
+    credentials = parse_qs(response.content)
     resource_owner_key = credentials.get('oauth_token')[0]
     resource_owner_secret = credentials.get('oauth_token_secret')[0]
     authorize_url = "https://api.twitter.com/oauth/authorize?oauth_token="
@@ -65,12 +76,12 @@ def authorize(consumer_key, consumer_secret):
     oauth = OAuth1(consumer_key, consumer_secret,
             resource_owner_key, resource_owner_secret, verifier=verifier)
     access_token_url = "https://api.twitter.com/oauth/access_token"
-    r = requests.post(url=access_token_url, auth=oauth)
-    credentials = parse_qs(r.content)
-    at = credentials.get('oauth_token')[0]
-    ats = credentials.get('oauth_token_secret')[0]
+    response = requests.post(url=access_token_url, auth=oauth)
+    credentials = parse_qs(response.content)
+    access_token = credentials.get('oauth_token')[0]
+    access_token_secret = credentials.get('oauth_token_secret')[0]
     #print(S_AUTH2.format(resource_owner_key, resource_owner_secret))
-    return at, ats
+    return access_token, access_token_secret
 
 def make_pipeline(source, pipeline_steps):
     """Make a pipeline."""
@@ -81,14 +92,13 @@ def make_pipeline(source, pipeline_steps):
 class TwitterStreamCrawler(object):
     url = 'https://stream.twitter.com/1.1/statuses/{0}.json'
 
-    def __init__(self, base_filename, user_key, user_secret, app_key,
-            app_secret):
+    def __init__(self, base_filename, auth):
         self.base_filename = base_filename
         self._db_instance = db.FileAppendDb(base_filename)
-        self._auth = OAuth1(app_key, app_secret, user_key, user_secret, 
-                      signature_type='auth_header')
+        self._auth = auth
         file_handler = logging.FileHandler(base_filename+".log")
         file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(formatter)
         LOGGER.addHandler(file_handler)
 
@@ -100,72 +110,31 @@ class TwitterStreamCrawler(object):
             #self._db_instance.sync()
             yield line
 
-    def _load(self, lines):
-        for line in lines:
-            try:
-                yield json.loads(line)
-            except ValueError:
-                LOGGER.error("Not valid JSON on line: %s", line)
-
-    def _check_limit(self, tweets):
+    @staticmethod
+    def _check_limit(tweets):
         for tweet in tweets:
             if 'limit' in tweet:
                 n_tweets = tweet['limit']['track']
                 LOGGER.warning("LIMIT: %s tweets retained", n_tweets)
             yield tweet
 
-    def request_stream(self, url, data):
+    def request_stream(self, endpoint, data, timeout):
         """Executes the pipeline and returns an iterator of tweets (dict)."""
+        url = self.url.format(endpoint)
 
         pipeline_steps = [
             self._save_to_db,
-            self._load,
+            iterjson,
             self._check_limit,
         ]
-        request = requests.post(url, data=data, auth=self._auth, stream=True, timeout=self.timeout)
+        request = requests.post(url, data=data, auth=self._auth, stream=True,
+                timeout=timeout)
         stream = request.iter_lines()
         pipeline = make_pipeline(stream, pipeline_steps)
 
-        for count, tweet in enumerate(pipeline):
+        for tweet in pipeline:
             yield tweet
 
-
-
-    def receive(self, endpoint, data, print_tweets=False):
-        """Receive data from the specified endpoint.
-
-        This function handles all the intermediate operations, such as building
-        the URL from the endpoint and handling log messages.
-
-        """
-        url = self.url.format(endpoint)
-
-        # Relaunch automatically on network error / broken pipe, ...
-        while True:
-            try:
-                LOGGER.info("Requesting stream: %s. Params: %s", url, data)
-                start_time = datetime.datetime.now()
-                stream = request_stream(url, data)
-                for count, tweet in enumerate(stream):
-                    if not count % 1000:
-                        now = datetime.datetime.now()
-                        delta = now - start_time
-                        rate = float(count) / delta.total_seconds()
-                        print("Total tweets", count, "\tRate", rate) # Change to logger.
-                        start_time = datetime.datetime.now()
-                    #print(tweet) TODO (control)
-            # Unless CTRL+C or exit
-            except (KeyboardInterrupt, SystemExit):
-                # TODO clean outfile?
-                LOGGER.info("Shutting down (manual shutdown).")
-                logging.shutdown()
-                sys.exit(0)
-            # Handle network timeout
-            except requests.exceptions.Timeout as e:
-                timeout = self.timeout
-                delay = self.delay # TODO introduce exp backoff
-                LOGGER.info("Request timed out (timeout=%s). Waiting and retrying (delay=%s).", timeout, delay)
-                time.sleep(delay)
 
 def make_keychain():
     k = Keychain()
@@ -183,16 +152,16 @@ def make_keychain():
             sys.exit(0)
         else:
             k = Keychain()
-            ck = raw_input("Input your CONSUMER KEY: ")
-            cs = raw_input("Input your CONSUMER SECRET: ")
-        k.set_consumer(ck, cs)
+            consumer_key = raw_input("Input your CONSUMER KEY: ")
+            consumer_secret = raw_input("Input your CONSUMER SECRET: ")
+        k.set_consumer(consumer_key, consumer_secret)
         usercred = query_yes_no("Do you have an ACCESS TOKEN, ACCESS TOKEN SECRET pair?")
         if usercred:
-            at = raw_input("Input your ACCESS TOKEN: ")
-            ats = raw_input("Input your ACCESS TOKEN SECRET: ")
+            access_token = raw_input("Input your ACCESS TOKEN: ")
+            access_token_secret = raw_input("Input your ACCESS TOKEN SECRET: ")
         else:
-            at, ats = authorize(ck, cs)
-        k.set_user(at, ats)
+            access_token, access_token_secret = authorize(consumer_key, consumer_secret)
+        k.set_user(access_token, access_token_secret)
 
     # Save the keychain for the next time
     k.save(authfname)
@@ -204,7 +173,7 @@ def parse_arguments():
     parser.add_argument('endpoint', help='Method of the Streaming API to use',
             choices=('filter', 'sample', 'firehose', 'authorize'))
     parser.add_argument('fileprefix', help='output json to the specified file',
-            action='store') 
+            action='store')
     parser.add_argument('-p', help="""add a method parameter ('name=value')""",
             metavar="PARNAME=PARVAL", action='append')
     parser.add_argument('-o', '--print', help='print every tweet', action='store_true')
@@ -216,7 +185,45 @@ def parse_arguments():
         action='store', type=int, metavar="SECS")
     return parser.parse_args()
 
+
+def relaunch_on_timeout(crawler, endpoint, data, timeout=30, delay=10):
+    """Receive data from the specified endpoint.
+
+    This function handles all the intermediate operations, such as building
+    the URL from the endpoint and handling log messages.
+
+    """
+
+    # Relaunch automatically on network error / broken pipe, ...
+    while True:
+        try:
+            LOGGER.info("Requesting stream: %s. Params: %s", endpoint, data)
+            start_time = datetime.datetime.now()
+            stream = crawler.request_stream(endpoint, data, timeout)
+            for count, tweet in enumerate(stream):
+                if not count % 1000:
+                    now = datetime.datetime.now()
+                    delta = now - start_time
+                    rate = float(count) / delta.total_seconds()
+                    # Change this to logger TODO
+                    print("Total tweets", count, "\tRate", rate)
+                    start_time = datetime.datetime.now()
+                #print(tweet) TODO (control)
+        # Unless CTRL+C or exit
+        except (KeyboardInterrupt, SystemExit):
+            # TODO clean outfile?
+            LOGGER.info("Shutting down (manual shutdown).")
+            logging.shutdown()
+            sys.exit(0)
+        # Handle network timeout
+        except requests.exceptions.Timeout:
+            # TODO introduce exp backoff
+            LOGGER.info("Request timed out (timeout=%s). Waiting and retrying (delay=%s).", timeout, delay)
+            time.sleep(delay)
+
+
 def main():
+    setup_logging()
     args = parse_arguments()
     keychain = make_keychain()
 
@@ -227,12 +234,13 @@ def main():
         assert set(data).intersection(('track', 'locations', 'follow'))
 
     filename = args.fileprefix
-    ck, cs = keychain.get_consumer()
-    at, ats = keychain.get_user()
-    api = TwitterStreamCrawler(filename, at, ats, ck, cs)
-    api.timeout = args.timeout
-    api.delay = args.delay
-    api.receive(args.endpoint, data, print_tweets=True)
+    consumer_key, consumer_secret = keychain.get_consumer()
+    access_token, access_token_secret = keychain.get_user()
+    auth = OAuth1(consumer_key, consumer_secret, access_token,
+            access_token_secret, signature_type='auth_header')
+    api = TwitterStreamCrawler(filename, auth)
+    #api.receive(args.endpoint, data, timeout=args.timeout, delay=args.delay)
+    relaunch_on_timeout(api, args.endpoint, data, timeout=args.timeout, delay=args.delay)
 
 if __name__ == "__main__":
     sys.exit(main())
