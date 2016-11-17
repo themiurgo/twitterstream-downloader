@@ -32,10 +32,14 @@ def setup_logging():
 
 def iterjson(lines):
     for line in lines:
+        line = line.strip()
         try:
             yield json.loads(line)
         except ValueError:
-            LOGGER.error("Not valid JSON on line: %s", line)
+            if line:
+                LOGGER.error("Not valid JSON on line: %s", line)
+            else:
+                LOGGER.info("Keep-alive message. No new tweets.")
 
 
 # TODO adapt the timeout to the rate of the tweets
